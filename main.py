@@ -13,9 +13,38 @@ import torchvision.utils as vutils
 from torch.autograd import Variable
 import os
 import json
+import bz2
+import _pickle as cPickle
+import numpy as np
 
 import models.dcgan as dcgan
 import models.mlp as mlp
+
+
+class MyDataset(torch.utils.data.Dataset):
+    """Organize dataset as a subclass of the Dataset class. Then, minibatches can efficiently be
+    loaded in and out of GPU memory
+    """
+    def __init__(self, shape=(128, 128)):
+        with bz2.BZ2File('/home/evenmn/ml-friction/dataset/simplex_friction_128x128.pbz2', 'rb') as f:
+            dataset = cPickle.load(f)
+
+        inputs = np.asarray(dataset['x'])
+        print(inputs.shape)
+        inputs = torch.FloatTensor(inputs)
+        inputs = inputs.view(-1, 1, *shape)
+        self.data = nn.functional.interpolate(inputs, size=shape, mode='bilinear')
+        print(self.data.shape)
+
+        self.labels = np.asarray(dataset['y'])
+
+    def __getitem__(self, index):
+        X = self.data[index]
+        return X, self.labels
+
+    def __len__(self):
+        return len(self.data)
+
 
 if __name__=="__main__":
 
@@ -88,6 +117,9 @@ if __name__=="__main__":
                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                             ])
         )
+    elif opt.dataset == 'simplex':
+        dataset = MyDataset()
+
     assert dataset
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize,
                                             shuffle=True, num_workers=int(opt.workers))
@@ -230,7 +262,7 @@ if __name__=="__main__":
             print('[%d/%d][%d/%d][%d] Loss_D: %f Loss_G: %f Loss_D_real: %f Loss_D_fake %f'
                 % (epoch, opt.niter, i, len(dataloader), gen_iterations,
                 errD.data[0], errG.data[0], errD_real.data[0], errD_fake.data[0]))
-            if gen_iterations % 500 == 0:
+            if gen_iterations % 1 == 0:
                 real_cpu = real_cpu.mul(0.5).add(0.5)
                 vutils.save_image(real_cpu, '{0}/real_samples.png'.format(opt.experiment))
                 fake = netG(Variable(fixed_noise, volatile=True))

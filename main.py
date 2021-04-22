@@ -17,6 +17,7 @@ import bz2
 import _pickle as cPickle
 import numpy as np
 from tqdm import trange
+import matplotlib.pyplot as plt
 
 import models.dcgan as dcgan
 import models.mlp as mlp
@@ -27,7 +28,7 @@ class MyDataset(torch.utils.data.Dataset):
     loaded in and out of GPU memory
     """
     def __init__(self, shape=(128, 128)):
-        with bz2.BZ2File('/home/evenmn/ml-friction/dataset/simplex_friction_128x128.pbz2', 'rb') as f:
+        with bz2.BZ2File('/home/users/evenmn/ml-friction/dataset/simplex_friction_128x128.pbz2', 'rb') as f:
             dataset = cPickle.load(f)
 
         inputs = np.asarray(dataset['x'])
@@ -185,6 +186,7 @@ if __name__=="__main__":
         input = input.cuda()
         one, mone = one.cuda(), mone.cuda()
         noise, fixed_noise = noise.cuda(), fixed_noise.cuda()
+        device = 'cuda:0'
 
     # setup optimizer
     if opt.adam:
@@ -194,12 +196,21 @@ if __name__=="__main__":
         optimizerD = optim.RMSprop(netD.parameters(), lr = opt.lrD)
         optimizerG = optim.RMSprop(netG.parameters(), lr = opt.lrG)
 
+    errD_real_list = []
+    errD_fake_list = []
+    errG_list = []
+
     pbar = trange(opt.niter)
 
     gen_iterations = 0
     for epoch in pbar:
         data_iter = iter(dataloader)
         i = 0
+
+        errD_real_cum = 0
+        errD_fake_cum = 0
+        errG_cum = 0
+
         while i < len(dataloader):
             ############################
             # (1) Update D network
@@ -238,13 +249,16 @@ if __name__=="__main__":
 
                 # train with fake
                 noise.resize_(opt.batchSize, nz, 1, 1).normal_(0, 1)
-                noisev = Variable(noise, volatile = True) # totally freeze netG
+                noisev = Variable(noise) # totally freeze netG
                 fake = Variable(netG(noisev).data)
                 inputv = fake
                 errD_fake = netD(inputv)
                 errD_fake.backward(mone)
                 errD = errD_real - errD_fake
                 optimizerD.step()
+
+                errD_real_cum += errD_real.item() / Diters
+                errD_fake_cum += errD_fake.item() / Diters
 
             ############################
             # (2) Update G network
@@ -260,6 +274,9 @@ if __name__=="__main__":
             errG = netD(fake)
             errG.backward(one)
             optimizerG.step()
+
+            errG_cum += errG.item()
+
             gen_iterations += 1
 
             #print('[%d/%d][%d/%d][%d] Loss_D: %f Loss_G: %f Loss_D_real: %f Loss_D_fake %f'
@@ -275,10 +292,59 @@ if __name__=="__main__":
             if gen_iterations % 1 == 0:
                 real_cpu = real_cpu.mul(0.5).add(0.5)
                 vutils.save_image(real_cpu, '{0}/real_samples.png'.format(opt.experiment))
-                fake = netG(Variable(fixed_noise, volatile=True))
+                fake = netG(Variable(fixed_noise))
                 fake.data = fake.data.mul(0.5).add(0.5)
                 vutils.save_image(fake.data, '{0}/fake_samples_{1}.png'.format(opt.experiment, gen_iterations))
 
         # do checkpointing
         torch.save(netG.state_dict(), '{0}/netG_epoch_{1}.pth'.format(opt.experiment, epoch))
         torch.save(netD.state_dict(), '{0}/netD_epoch_{1}.pth'.format(opt.experiment, epoch))
+
+        errD_real_list.append(errD_real_cum / len(dataloader))
+        errD_fake_list.append(errD_fake_cum / len(dataloader))
+        errG_list.append(errG_cum / len(dataloader))
+
+        if epoch % 50 == 0 or epoch == opt.niter - 1:
+            # real vs fake discriminator loss
+            plt.figure()
+            plt.plot(range(epoch + 1), errD_real_list, label="real")
+            plt.plot(range(epoch + 1), errD_fake_list, label="fake")
+            plt.xlabel("Epochs")
+            plt.ylabel("Discriminator loss")
+            plt.legend(loc='best')
+            plt.savefig(f'{opt.experiment}/netD_loss_epoch_{epoch}.png')
+
+            # discriminator vs generator loss
+            errD_list = np.array(errD_real_list) + np.array(errD_fake_list)
+            plt.figure()
+            plt.plot(range(epoch + 1), errD_list, label="netD")
+            plt.plot(range(epoch + 1), errG_list, label="netG")
+            plt.xlabel("Epochs")
+            plt.ylabel("Loss")
+            plt.legend(loc='best')
+            plt.savefig(f'{opt.experiment}/loss_epoch_{epoch}.png')
+
+            # real vs fake surfaces
+            # real
+            #real = dataset[np.random.randint(len(dataset), size=3)]
+            # fake
+            #noise = torch.randn(3, nz, 1, 1)
+            #fake = netG(noise.cuda())
+            #data = torch.cat((real, fake.cpu()))
+            #grid_img = vutils.make_grid(data, nrow=3)
+            #plt.imshow(grid_img.permute(1, 2, 0), cmap='Greys')
+            #plt.ylabel("Fake   |   Real")
+            #plt.colorbar()
+            # plt.axis('off')
+            #plt.savefig(f"{opt.experiment}/real_fake_{epoch}.png")
+
+            # check periodicity
+            noise = torch.randn(10, nz, 1, 1, device=device)
+            fake = netG(noise)
+            fake_numpy = fake.cpu().detach().numpy()[6, 0]
+            fake_tiled = np.tile(fake_numpy, (2, 2))
+            plt.figure()
+            plt.imshow(fake_tiled, cmap='Greys')
+            plt.axis('off')
+            plt.colorbar()
+            plt.savefig(f'{opt.experiment}/periodic_{epoch}.png')

@@ -11,7 +11,7 @@ class DCGAN_D(nn.Module):
         main = nn.Sequential()
         # input is nc x isize x isize
         main.add_module('initial:{0}-{1}:conv'.format(nc, ndf),
-                        nn.Conv2d(nc, ndf, 4, 2, 1, bias=False))
+                        nn.Conv2d(nc, ndf, 4, 2, 1, padding_mode='circular', bias=False))
         main.add_module('initial:{0}:relu'.format(ndf),
                         nn.LeakyReLU(0.2, inplace=True))
         csize, cndf = isize / 2, ndf
@@ -94,8 +94,8 @@ class DCGAN_G(nn.Module):
 
         main.add_module('final:{0}-{1}:convt'.format(cngf, nc),
                         nn.ConvTranspose2d(cngf, nc, 4, 2, 1, bias=False))
-        main.add_module('final:{0}:tanh'.format(nc),
-                        nn.Tanh())
+        main.add_module('final:{0}:sigmoid'.format(nc),
+                        nn.Sigmoid())
         self.main = main
 
     def forward(self, input):
@@ -187,8 +187,8 @@ class DCGAN_G_nobn(nn.Module):
 
         main.add_module('final:{0}-{1}:convt'.format(cngf, nc),
                         nn.ConvTranspose2d(cngf, nc, 4, 2, 1, bias=False))
-        main.add_module('final:{0}:tanh'.format(nc),
-                        nn.Tanh())
+        main.add_module('final:{0}:sigmoid'.format(nc),
+                        nn.Sigmoid())
         self.main = main
 
     def forward(self, input):

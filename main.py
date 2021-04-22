@@ -16,6 +16,7 @@ import json
 import bz2
 import _pickle as cPickle
 import numpy as np
+from tqdm import trange
 
 import models.dcgan as dcgan
 import models.mlp as mlp
@@ -193,8 +194,10 @@ if __name__=="__main__":
         optimizerD = optim.RMSprop(netD.parameters(), lr = opt.lrD)
         optimizerG = optim.RMSprop(netG.parameters(), lr = opt.lrG)
 
+    pbar = trange(opt.niter)
+
     gen_iterations = 0
-    for epoch in range(opt.niter):
+    for epoch in pbar:
         data_iter = iter(dataloader)
         i = 0
         while i < len(dataloader):
@@ -259,9 +262,16 @@ if __name__=="__main__":
             optimizerG.step()
             gen_iterations += 1
 
-            print('[%d/%d][%d/%d][%d] Loss_D: %f Loss_G: %f Loss_D_real: %f Loss_D_fake %f'
-                % (epoch, opt.niter, i, len(dataloader), gen_iterations,
-                errD.data[0], errG.data[0], errD_real.data[0], errD_fake.data[0]))
+            #print('[%d/%d][%d/%d][%d] Loss_D: %f Loss_G: %f Loss_D_real: %f Loss_D_fake %f'
+            #    % (epoch, opt.niter, i, len(dataloader), gen_iterations,
+            #    errD.data[0], errG.data[0], errD_real.data[0], errD_fake.data[0]))
+            
+            pbar.set_description('[%d/%d][%d/%d][%d] Loss_D: %f Loss_G: %f Loss_D_real: %f Loss_D_fake %f'
+                  % (epoch, opt.niter, i, len(dataloader), gen_iterations,
+                     errD.data[0], errG.data[0], errD_real.data[0], errD_fake.data[0]))
+
+            #pbar.set_description('[%d/%d] Loss_D: %.4f Loss_G: %.4f'
+            #      % (i, len(dataloader), errD.item(), errG.item()))
             if gen_iterations % 1 == 0:
                 real_cpu = real_cpu.mul(0.5).add(0.5)
                 vutils.save_image(real_cpu, '{0}/real_samples.png'.format(opt.experiment))

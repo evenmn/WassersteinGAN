@@ -13,45 +13,20 @@ import torchvision.utils as vutils
 from torch.autograd import Variable
 import os
 import json
-import bz2
-import _pickle as cPickle
-import numpy as np
 from tqdm import trange
 import matplotlib.pyplot as plt
+import numpy as np
 
 import models.dcgan as dcgan
+import models.cdcgan as cdcgan
 import models.mlp as mlp
 
-
-class MyDataset(torch.utils.data.Dataset):
-    """Organize dataset as a subclass of the Dataset class. Then, minibatches can efficiently be
-    loaded in and out of GPU memory
-    """
-    def __init__(self, shape=(128, 128)):
-        with bz2.BZ2File('/home/users/evenmn/ml-friction/dataset/simplex_friction_128x128.pbz2', 'rb') as f:
-            dataset = cPickle.load(f)
-
-        inputs = np.asarray(dataset['x'])
-        print(inputs.shape)
-        inputs = torch.FloatTensor(inputs)
-        inputs = inputs.view(-1, 1, *shape)
-        self.data = nn.functional.interpolate(inputs, size=shape, mode='bilinear')
-        print(self.data.shape)
-
-        self.labels = np.asarray(dataset['y'])
-
-    def __getitem__(self, index):
-        X = self.data[index]
-        return X, self.labels
-
-    def __len__(self):
-        return len(self.data)
+from dataset.simplex import SimplexDataset
 
 
 if __name__=="__main__":
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', required=True, help='cifar10 | lsun | imagenet | folder | lfw ')
+    parser.add_argument('--dataset', required=True, help='cifar10 | lsun | imagenet | folder | lfw | simplex')
     parser.add_argument('--dataroot', required=True, help='path to dataset')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
     parser.add_argument('--batchSize', type=int, default=64, help='input batch size')
@@ -74,6 +49,8 @@ if __name__=="__main__":
     parser.add_argument('--noBN', action='store_true', help='use batchnorm or not (only for DCGAN)')
     parser.add_argument('--mlp_G', action='store_true', help='use MLP for G')
     parser.add_argument('--mlp_D', action='store_true', help='use MLP for D')
+    parser.add_argument('--conditional', action='store_true', help='train with conditions')
+    parser.add_argument('--nfeatures', type=int, default=0, help='Number of conditional features')
     parser.add_argument('--n_extra_layers', type=int, default=0, help='Number of extra layers on gen and disc')
     parser.add_argument('--experiment', default=None, help='Where to store samples and models')
     parser.add_argument('--adam', action='store_true', help='Whether to use adam (default is rmsprop)')
@@ -120,7 +97,7 @@ if __name__=="__main__":
                             ])
         )
     elif opt.dataset == 'simplex':
-        dataset = MyDataset()
+        dataset = SimplexDataset(root=opt.dataroot, isize=opt.imageSize)
 
     assert dataset
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize,
@@ -131,10 +108,11 @@ if __name__=="__main__":
     ngf = int(opt.ngf)
     ndf = int(opt.ndf)
     nc = int(opt.nc)
+    nfeatures = int(opt.nfeatures)
     n_extra_layers = int(opt.n_extra_layers)
 
     # write out generator config to generate images together wth training checkpoints (.pth)
-    generator_config = {"imageSize": opt.imageSize, "nz": nz, "nc": nc, "ngf": ngf, "ngpu": ngpu, "n_extra_layers": n_extra_layers, "noBN": opt.noBN, "mlp_G": opt.mlp_G}
+    generator_config = {"imageSize": opt.imageSize, "nz": nz, "nc": nc, "ngf": ngf, "ngpu": ngpu, "n_extra_layers": n_extra_layers, "nfeatures": nfeatures, "noBN": opt.noBN, "mlp_G": opt.mlp_G}
     with open(os.path.join(opt.experiment, "generator_config.json"), 'w') as gcfg:
         gcfg.write(json.dumps(generator_config)+"\n")
 
@@ -148,14 +126,20 @@ if __name__=="__main__":
             m.bias.data.fill_(0)
 
     if opt.noBN:
-        netG = dcgan.DCGAN_G_nobn(opt.imageSize, nz, nc, ngf, ngpu, n_extra_layers)
+        if opt.conditional:
+            netG = cdcgan.DCGAN_G_nobn(opt.imageSize, nz, nc, ngf, ngpu, nfeatures, n_extra_layers)
+        else:
+            netG = dcgan.DCGAN_G_nobn(opt.imageSize, nz, nc, ngf, ngpu, n_extra_layers)
     elif opt.mlp_G:
         netG = mlp.MLP_G(opt.imageSize, nz, nc, ngf, ngpu)
     else:
-        netG = dcgan.DCGAN_G(opt.imageSize, nz, nc, ngf, ngpu, n_extra_layers)
+        if opt.conditional:
+            netG = cdcgan.DCGAN_G(opt.imageSize, nz, nc, ngf, ngpu, nfeatures, n_extra_layers)
+        else:
+            netG = dcgan.DCGAN_G(opt.imageSize, nz, nc, ngf, ngpu, n_extra_layers)
 
-    # write out generator config to generate images together wth training checkpoints (.pth)
-    generator_config = {"imageSize": opt.imageSize, "nz": nz, "nc": nc, "ngf": ngf, "ngpu": ngpu, "n_extra_layers": n_extra_layers, "noBN": opt.noBN, "mlp_G": opt.mlp_G}
+    # write out generator config to generate images together with training checkpoints (.pth)
+    generator_config = {"imageSize": opt.imageSize, "nz": nz, "nc": nc, "ngf": ngf, "ngpu": ngpu, "nfeatures": nfeatures, "n_extra_layers": n_extra_layers, "noBN": opt.noBN, "mlp_G": opt.mlp_G}
     with open(os.path.join(opt.experiment, "generator_config.json"), 'w') as gcfg:
         gcfg.write(json.dumps(generator_config)+"\n")
 
@@ -166,6 +150,9 @@ if __name__=="__main__":
 
     if opt.mlp_D:
         netD = mlp.MLP_D(opt.imageSize, nz, nc, ndf, ngpu)
+    elif opt.conditional:
+        netD = cdcgan.DCGAN_D(opt.imageSize, nz, nc, ndf, ngpu, nfeatures, n_extra_layers)
+        netD.apply(weights_init)
     else:
         netD = dcgan.DCGAN_D(opt.imageSize, nz, nc, ndf, ngpu, n_extra_layers)
         netD.apply(weights_init)
@@ -174,9 +161,17 @@ if __name__=="__main__":
         netD.load_state_dict(torch.load(opt.netD))
     print(netD)
 
-    input = torch.FloatTensor(opt.batchSize, 3, opt.imageSize, opt.imageSize)
+    input = torch.FloatTensor(opt.batchSize, 4, opt.imageSize, opt.imageSize)
     noise = torch.FloatTensor(opt.batchSize, nz, 1, 1)
     fixed_noise = torch.FloatTensor(opt.batchSize, nz, 1, 1).normal_(0, 1)
+    
+    if opt.dataset == 'simplex':
+        forces = np.linspace(900, 1800, opt.batchSize)
+        fixed_attr = np.column_stack([forces, forces, forces/2])
+    else:
+        fixed_attr = torch.FloatTensor(opt.batchSize, nfeatures)
+    fixed_attr = torch.FloatTensor(fixed_attr).view(opt.batchSize, -1)
+    
     one = torch.FloatTensor([1])
     mone = one * -1
 
@@ -185,7 +180,7 @@ if __name__=="__main__":
         netG.cuda()
         input = input.cuda()
         one, mone = one.cuda(), mone.cuda()
-        noise, fixed_noise = noise.cuda(), fixed_noise.cuda()
+        noise, fixed_noise, fixed_attr = noise.cuda(), fixed_noise.cuda(), fixed_attr.cuda()
         device = 'cuda:0'
 
     # setup optimizer
@@ -212,7 +207,7 @@ if __name__=="__main__":
         errG_cum = 0
 
         while i < len(dataloader):
-            ############################
+            ###########################
             # (1) Update D network
             ###########################
             for p in netD.parameters(): # reset requires_grad
@@ -235,24 +230,37 @@ if __name__=="__main__":
                 i += 1
 
                 # train with real
-                real_cpu, _ = data
+                real_cpu, attr = data
                 netD.zero_grad()
                 batch_size = real_cpu.size(0)
 
                 if opt.cuda:
                     real_cpu = real_cpu.cuda()
+                    attr = attr.cuda()
                 input.resize_as_(real_cpu).copy_(real_cpu)
                 inputv = Variable(input)
 
-                errD_real = netD(inputv)
+                if opt.conditional:
+                    errD_real = netD(inputv, attr)
+                else:
+                    errD_real = netD(inputv)
                 errD_real.backward(one)
 
                 # train with fake
-                noise.resize_(opt.batchSize, nz, 1, 1).normal_(0, 1)
+                noise.resize_(attr.shape[0], nz, 1, 1).normal_(0, 1)
                 noisev = Variable(noise) # totally freeze netG
-                fake = Variable(netG(noisev).data)
-                inputv = fake
-                errD_fake = netD(inputv)
+                if opt.conditional:
+                    fake = Variable(netG(noisev, attr).data)
+                    errD_fake = netD(fake, attr)
+                else:
+                    fake = Variable(netG(noisev).data)
+                    errD_fake = netD(fake)
+                #inputv = fake
+
+                #if opt.conditional:
+                #    errD_fake = netD(inputv, attr)
+                #else:
+                #    errD_fake = netD(inputv)
                 errD_fake.backward(mone)
                 errD = errD_real - errD_fake
                 optimizerD.step()
@@ -268,10 +276,15 @@ if __name__=="__main__":
             netG.zero_grad()
             # in case our last batch was the tail batch of the dataloader,
             # make sure we feed a full batch of noise
-            noise.resize_(opt.batchSize, nz, 1, 1).normal_(0, 1)
+            noise.resize_(attr.shape[0], nz, 1, 1).normal_(0, 1)
             noisev = Variable(noise)
-            fake = netG(noisev)
-            errG = netD(fake)
+            
+            if opt.conditional:
+                fake = netG(noisev, attr)
+                errG = netD(fake, attr)
+            else:
+                fake = netG(noisev)
+                errG = netD(fake)
             errG.backward(one)
             optimizerG.step()
 
@@ -292,7 +305,11 @@ if __name__=="__main__":
             if gen_iterations % 1 == 0:
                 real_cpu = real_cpu.mul(0.5).add(0.5)
                 vutils.save_image(real_cpu, '{0}/real_samples.png'.format(opt.experiment))
-                fake = netG(Variable(fixed_noise))
+                
+                if opt.conditional:
+                    fake = netG(Variable(fixed_noise), fixed_attr)
+                else:
+                    fake = netG(Variable(fixed_noise))
                 fake.data = fake.data.mul(0.5).add(0.5)
                 vutils.save_image(fake.data, '{0}/fake_samples_{1}.png'.format(opt.experiment, gen_iterations))
 
@@ -339,9 +356,15 @@ if __name__=="__main__":
             #plt.savefig(f"{opt.experiment}/real_fake_{epoch}.png")
 
             # check periodicity
-            noise = torch.randn(10, nz, 1, 1, device=device)
-            fake = netG(noise)
-            fake_numpy = fake.cpu().detach().numpy()[6, 0]
+            noise = torch.randn(1, nz, 1, 1, device=device)
+            if opt.conditional:
+                attr = torch.FloatTensor([1600, 1600, 800])
+                if opt.cuda:
+                    attr = attr.cuda()
+                fake = netG(noise, attr)
+            else:
+                fake = netG(noise)
+            fake_numpy = fake.cpu().detach().numpy()[0, 0]
             fake_tiled = np.tile(fake_numpy, (2, 2))
             plt.figure()
             plt.imshow(fake_tiled, cmap='Greys')

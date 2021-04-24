@@ -40,6 +40,7 @@ if __name__=="__main__":
     parser.add_argument('--lrG', type=float, default=0.00005, help='learning rate for Generator, default=0.00005')
     parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
     parser.add_argument('--cuda'  , action='store_true', help='enables cuda')
+    parser.add_argument('--cuda_device', type=int, default=0, help='set cuda device')
     parser.add_argument('--ngpu'  , type=int, default=1, help='number of GPUs to use')
     parser.add_argument('--netG', default='', help="path to netG (to continue training)")
     parser.add_argument('--netD', default='', help="path to netD (to continue training)")
@@ -176,12 +177,12 @@ if __name__=="__main__":
     mone = one * -1
 
     if opt.cuda:
-        netD.cuda()
-        netG.cuda()
-        input = input.cuda()
-        one, mone = one.cuda(), mone.cuda()
-        noise, fixed_noise, fixed_attr = noise.cuda(), fixed_noise.cuda(), fixed_attr.cuda()
-        device = 'cuda:0'
+        device = f'cuda:{opt.cuda_device}'
+        netD.to(device)
+        netG.to(device)
+        input = input.to(device)
+        one, mone = one.to(device), mone.to(device)
+        noise, fixed_noise, fixed_attr = noise.to(device), fixed_noise.to(device), fixed_attr.to(device)
 
     # setup optimizer
     if opt.adam:
@@ -193,6 +194,7 @@ if __name__=="__main__":
 
     errD_real_list = []
     errD_fake_list = []
+    errD_list = []
     errG_list = []
 
     pbar = trange(opt.niter)
@@ -204,6 +206,7 @@ if __name__=="__main__":
 
         errD_real_cum = 0
         errD_fake_cum = 0
+        errD_cum = 0
         errG_cum = 0
 
         while i < len(dataloader):
@@ -235,8 +238,8 @@ if __name__=="__main__":
                 batch_size = real_cpu.size(0)
 
                 if opt.cuda:
-                    real_cpu = real_cpu.cuda()
-                    attr = attr.cuda()
+                    real_cpu = real_cpu.to(device)
+                    attr = attr.to(device)
                 input.resize_as_(real_cpu).copy_(real_cpu)
                 inputv = Variable(input)
 
@@ -248,25 +251,21 @@ if __name__=="__main__":
 
                 # train with fake
                 noise.resize_(attr.shape[0], nz, 1, 1).normal_(0, 1)
-                noisev = Variable(noise) # totally freeze netG
+                noisev = Variable(noise, requires_grad=False) # totally freeze netG
                 if opt.conditional:
                     fake = Variable(netG(noisev, attr).data)
                     errD_fake = netD(fake, attr)
                 else:
                     fake = Variable(netG(noisev).data)
                     errD_fake = netD(fake)
-                #inputv = fake
 
-                #if opt.conditional:
-                #    errD_fake = netD(inputv, attr)
-                #else:
-                #    errD_fake = netD(inputv)
                 errD_fake.backward(mone)
                 errD = errD_real - errD_fake
                 optimizerD.step()
 
                 errD_real_cum += errD_real.item() / Diters
                 errD_fake_cum += errD_fake.item() / Diters
+                errD_cum += errD.item() / Diters
 
             ############################
             # (2) Update G network
@@ -319,6 +318,7 @@ if __name__=="__main__":
 
         errD_real_list.append(errD_real_cum / len(dataloader))
         errD_fake_list.append(errD_fake_cum / len(dataloader))
+        errD_list.append(errD_cum / len(dataloader))
         errG_list.append(errG_cum / len(dataloader))
 
         if epoch % 50 == 0 or epoch == opt.niter - 1:
@@ -332,7 +332,6 @@ if __name__=="__main__":
             plt.savefig(f'{opt.experiment}/netD_loss_epoch_{epoch}.png')
 
             # discriminator vs generator loss
-            errD_list = np.array(errD_real_list) + np.array(errD_fake_list)
             plt.figure()
             plt.plot(range(epoch + 1), errD_list, label="netD")
             plt.plot(range(epoch + 1), errG_list, label="netG")
@@ -340,6 +339,13 @@ if __name__=="__main__":
             plt.ylabel("Loss")
             plt.legend(loc='best')
             plt.savefig(f'{opt.experiment}/loss_epoch_{epoch}.png')
+
+            # discriminator vs generator loss
+            plt.figure()
+            plt.plot(range(epoch + 1), np.abs(errD_list))
+            plt.xlabel("Generator epochs")
+            plt.ylabel("Wasserstein estimate")
+            plt.savefig(f'{opt.experiment}/EM_epoch_{epoch}.png')
 
             # real vs fake surfaces
             # real
@@ -360,7 +366,7 @@ if __name__=="__main__":
             if opt.conditional:
                 attr = torch.FloatTensor([1600, 1600, 800])
                 if opt.cuda:
-                    attr = attr.cuda()
+                    attr = attr.to(device)
                 fake = netG(noise, attr)
             else:
                 fake = netG(noise)

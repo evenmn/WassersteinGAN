@@ -21,7 +21,7 @@ import models.dcgan as dcgan
 import models.cdcgan as cdcgan
 import models.mlp as mlp
 
-from dataset.simplex import SimplexDataset
+from dataset.simplex import SimplexDataset, UnlabeledSimplexDataset
 
 
 if __name__=="__main__":
@@ -99,6 +99,9 @@ if __name__=="__main__":
         )
     elif opt.dataset == 'simplex':
         dataset = SimplexDataset(root=opt.dataroot, isize=opt.imageSize)
+
+    elif opt.dataset == 'unlabeledsimplex':
+        dataset = UnlabeledSimplexDataset(root=opt.dataroot, isize=opt.imageSize)
 
     assert dataset
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize,
@@ -217,7 +220,7 @@ if __name__=="__main__":
                 p.requires_grad = True # they are set to False below in netG update
 
             # train the discriminator Diters times
-            if gen_iterations < 25 or gen_iterations % 500 == 0:
+            if gen_iterations < 25: # or gen_iterations % 500 == 0:
                 Diters = 100
             else:
                 Diters = opt.Diters
